@@ -13,16 +13,18 @@ set(LLVM_LINK_COMPONENTS
   LLVMPasses
   )
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 message(STATUS "LLVM LIBS : ${LLVM_LINK_COMPONENTS}")
 # Support plugins.
 
-set(ASSIGNMENT_VIEW on)
-if(${ASSIGNMENT_VIEW})
-add_definitions(-DASSIGNMENT_VIEW)
+set(ANALYSIS_INTERNAL on)
+if(${ANALYSIS_INTERNAL})
+add_definitions(-DANALYSIS_INTERNAL)
 endif()
 
 add_executable(llvmassignment
   LLVMAssignment.cpp
+  CallAnalysis.cpp
   )
 
 target_link_libraries(llvmassignment

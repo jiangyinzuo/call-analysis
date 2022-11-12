@@ -9,7 +9,7 @@
 			"type": "cppdbg",
 			"request": "launch",
 			"program": "${workspaceFolder}/build/llvmassignment",
-			"args": ["assign2-tests/test21.bc"],
+			"args": ["assign2-tests/test06.bc"],
 			"stopAtEntry": false,
 			"cwd": "${fileDirname}",
 			"environment": [],
