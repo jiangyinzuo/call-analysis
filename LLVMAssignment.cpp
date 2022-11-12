@@ -62,25 +62,17 @@ struct FuncPtrPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
   FuncPtrPass() : ModulePass(ID) {}
 
-  struct BlockMap {
-    std::unordered_map<BasicBlock *, std::vector<Value *>> m;
-
-    void merge(BlockMap &&other) {
-      for (auto &[b, vec] : other.m) {
-        auto &bucket = m[b];
-        for (auto v : vec) {
-          bucket.push_back(v);
-        }
-      }
-    }
-  };
-
-  static BlockMap SplitPhi(Value *v) {
-    BlockMap result;
+  static std::vector<Value *> SplitPhi(Value *v) {
+    std::vector<Value *> result;
     if (PHINode *phi = dyn_cast<PHINode>(v)) {
       for (unsigned i = 0; i < v->getNumUses(); ++i) {
-        result.m[phi->block_begin()[i]].push_back(phi->op_begin()[i]);
+        auto vec = SplitPhi(phi->op_begin()[i]);
+        for (auto &value : vec) {
+          result.push_back(value);
+        }
       }
+    } else {
+      result.push_back(v);
     }
     return result;
   }
@@ -88,22 +80,36 @@ struct FuncPtrPass : public ModulePass {
   struct FnCall {
     std::vector<Value *> operands;
 
+    static void genFnCall(const std::vector<std::vector<Value *>> &operandsVec,
+                          unsigned level, std::vector<Value *> &operands,
+                          std::vector<FnCall> &output) {
+      if (level == operandsVec.size()) {
+        output.emplace_back(operands);
+        return;
+      }
+      for (auto *v : operandsVec[level]) {
+        operands.push_back(v);
+        genFnCall(operandsVec, level + 1, operands, output);
+        operands.pop_back();
+      }
+    }
+
     static std::vector<FnCall> SplitPhi(CallInst *c) {
-      BlockMap m = FuncPtrPass::SplitPhi(c->getCalledOperand());
+      std::vector<std::vector<Value *>> operandsVec;
+      operandsVec.push_back(FuncPtrPass::SplitPhi(c->getCalledOperand()));
       for (auto it = c->op_begin(); it != c->op_end(); ++it) {
-        Value *v = it->get();
-        m.merge(FuncPtrPass::SplitPhi(v));
+        operandsVec.push_back(FuncPtrPass::SplitPhi(it->get()));
       }
 
       std::vector<FnCall> result;
-      for (auto &[_bb, vec] : m.m) {
-        result.emplace_back(vec);
-      }
+      std::vector<Value *> ops;
+      genFnCall(operandsVec, 0, ops, result);
+      assert(ops.empty());
       return result;
     }
 
     explicit FnCall() = default;
-    explicit FnCall(std::vector<Value *> &&operands) : operands(operands) {}
+    // explicit FnCall(std::vector<Value *> &&operands) : operands(operands) {}
     explicit FnCall(CallInst *c) {
       operands.push_back(c->getCalledOperand());
       for (unsigned i = 0; i < c->arg_size(); ++i) {
@@ -141,6 +147,17 @@ struct FuncPtrPass : public ModulePass {
     FnCall call;
     Value *v;
 
+    static std::vector<FnReturn> SplitPhi(ReturnInst *retInst) {
+      std::vector<FnReturn> result;
+      Value *v = retInst->getReturnValue();
+      
+      if (CallInst *c = dyn_cast<CallInst>(v)) {
+        auto vec = FnCall::SplitPhi(c);
+        for (auto &v : vec) {
+
+        }
+      }
+    }
     explicit FnReturn(CallInst *c) : ty(Type::Call), call(c) {}
 
     explicit FnReturn(Value *v) : ty(Type::Value), v(v) {}
