@@ -36,4 +36,4 @@ int moo(char x, int op1, int op2) {
 // 14 : foo
 // 18 : clever, foo
 // 30 : clever1
-// 31 : minus
+// 31 : plus

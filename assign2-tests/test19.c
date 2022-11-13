@@ -18,8 +18,8 @@ int (*clever1(int (* (*goo_ptr)(int, int, int (*)(int, int), int(*)(int, int)))(
    int (*f_fptr)(int, int) = goo_ptr(a,b,b_fptr,a_fptr);
    if (a == '+')
    {
-        f_fptr = minus;
-        a_fptr = plus;
+        f_fptr = plus;
+        a_fptr = minus;
    }
    return goo_ptr(a,b,f_fptr,a_fptr);
 }
@@ -43,4 +43,4 @@ int moo(char x, int op1, int op2) {
 // 18 : clever, foo
 // 24 : clever, foo
 // 36 : clever1
-// 37 : minus
+// 37 : plus

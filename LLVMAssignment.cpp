@@ -60,10 +60,12 @@ struct FuncPtrPass : public llvm::ModulePass {
 
 public:
   bool runOnModule(llvm::Module &M) override {
-    llvm::errs() << "Hello: ";
+#ifdef ANALYSIS_INTERNAL
+    llvm::errs() << "[LLVM IR]\n";
     llvm::errs().write_escaped(M.getName()) << '\n';
     M.dump();
     llvm::errs() << "------------------------------\n";
+#endif
     call_analysis::CallAnalysis analysis;
     analysis.Run(M);
     return false;
