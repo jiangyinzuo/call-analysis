@@ -1,11 +1,66 @@
 #include "CallAnalysis.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Module.h"
+#include <cstddef>
+#include <functional>
 
 namespace call_analysis {
 
-std::optional<Function> CallInst::TryEvaluate() {
+size_t Function::Hasher::operator()(const Function &c) const {
+  return std::hash<llvm::Function *>()(c.fn);
+}
 
+size_t FuncArgument::Hasher::operator()(const FuncArgument &c) const {
+  return std::hash<llvm::Argument *>()(c.arg) + c.idx;
+}
+
+size_t CallInst::Hasher::operator()(const CallInst &c) const {
+  size_t hash = 0;
+  for (auto &operand : c.operands) {
+    hash += CallAnalysisValue::Hasher()(operand);
+  }
+  return hash;
+}
+
+struct HashVisitor {
+  size_t hash;
+  template <class T> void operator()(T &t) {
+    typename T::Hasher hasher;
+    hash = hasher(t);
+  }
+};
+
+size_t CallAnalysisValue::Hasher::operator()(const CallAnalysisValue &c) const {
+  HashVisitor visitor;
+  visitor(c);
+  return visitor.hash;
+}
+
+struct EvaluateVisitor {
+  const std::vector<Function> &boundParams;
+  std::vector<Function> &results;
+  std::vector<Function> arguments;
+
+  explicit EvaluateVisitor(const std::vector<Function> &args,
+                           std::vector<Function> &results)
+      : boundParams(args), results(results) {}
+
+  void operator()(Function &f) { arguments.push_back(f); }
+  void operator()(FuncArgument &fa) {
+    arguments.push_back(boundParams[fa.idx]);
+  }
+  void operator()(CallInst &c) {
+    // c.TryEvaluate(const std::vector<Function> &args, std::vector<Function> &results) TODO:
+  }
+};
+
+bool CallInst::TryEvaluate(const std::vector<Function> &args,
+                           std::vector<Function> &results) {
+  EvaluateVisitor visitor(args, results);
+  for (auto &operand : operands) {
+    std::visit(visitor, operand.cv);
+  }
+  return false;
 }
 
 std::string CallInst::ToString() const {
@@ -34,21 +89,35 @@ void CallInst::combineCallInst(
 }
 
 static bool isFnOrFnPtrTy(llvm::Type *ty) {
-	if (ty->isFunctionTy()) return true;
-	if (auto* pt = llvm::dyn_cast<llvm::PointerType>(ty)) {
-		return isFnOrFnPtrTy(pt->getElementType());
-	}
-	return false;
+  if (ty->isFunctionTy())
+    return true;
+  if (auto *pt = llvm::dyn_cast<llvm::PointerType>(ty)) {
+    return isFnOrFnPtrTy(pt->getElementType());
+  }
+  return false;
 }
 
-std::vector<CallInst> CallInst::SplitPhi(llvm::CallInst *c) {
+bool CallInst::operator==(const CallInst &other) const {
+  if (operands.size() != other.operands.size()) {
+    return false;
+  }
+  for (unsigned i = 0; i < operands.size(); ++i) {
+    if (!(operands[i] == other.operands[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<CallInst> CallInst::SplitPhi(llvm::CallInst *c,
+                                         std::vector<FuncArgument> &args) {
   std::vector<std::vector<CallAnalysisValue>> splittedOperands;
   splittedOperands.push_back(
-      CallAnalysisValue::SplitPhi(c->getCalledOperand()));
+      CallAnalysisValue::SplitPhi(c->getCalledOperand(), args));
   for (unsigned i = 0; i < c->arg_size(); ++i) {
     llvm::Value *op = c->getOperand(i);
     if (auto ty = op->getType(); isFnOrFnPtrTy(ty)) {
-      splittedOperands.push_back(CallAnalysisValue::SplitPhi(op));
+      splittedOperands.push_back(CallAnalysisValue::SplitPhi(op, args));
     }
   }
 
@@ -73,8 +142,19 @@ std::string CallAnalysisValue::ToString() const {
 }
 
 void CallAnalysis::Run(llvm::Module &M) {
+  Clear();
   for (auto it = M.begin(); it != M.end(); it++) {
     llvm::Function &f = *it;
+    {
+      unsigned argIdx = 0;
+      for (auto &arg : f.args()) {
+        if (isFnOrFnPtrTy(arg.getType())) {
+          lazyEvaledFn[&f].args.push_back(FuncArgument{argIdx, &arg});
+          ++argIdx;
+        }
+      }
+    }
+
     for (llvm::BasicBlock &block : f.getBasicBlockList()) {
       for (auto &inst : block.instructionsWithoutDebug()) {
         if (llvm::ReturnInst *retInst =
@@ -82,12 +162,19 @@ void CallAnalysis::Run(llvm::Module &M) {
           if (auto ty = f.getReturnType();
               ty->isPointerTy() || ty->isPointerTy()) {
             auto *v = retInst->getReturnValue();
-            auto splittedCav = CallAnalysisValue::SplitPhi(v);
-            lazyEvaledFn[&f] = std::move(splittedCav);
+            auto splittedCav =
+                CallAnalysisValue::SplitPhi(v, lazyEvaledFn[&f].args);
+            auto &retValues = lazyEvaledFn[&f].returnValues;
+            assert(retValues.empty());
+            retValues = std::move(splittedCav);
           }
         } else if (llvm::CallInst *callInst =
                        llvm::dyn_cast<llvm::CallInst>(&inst)) {
-          auto splittedCallInst = CallInst::SplitPhi(callInst);
+          auto splittedCallInst =
+              CallInst::SplitPhi(callInst, lazyEvaledFn[&f].args);
+          for (auto &c : splittedCallInst) {
+            lazyEvaledFn[&f].callees.push_back(c);
+          }
           lazyEvaledCallInst[callInst] = std::move(splittedCallInst);
         }
       }
@@ -99,14 +186,31 @@ void CallAnalysis::Run(llvm::Module &M) {
 #endif
 
   // evaluate callInsts and functions
+  for (auto &[llvmFn, fnNode] : lazyEvaledFn) {
+    if (fnNode.args.empty()) { // root function
+      for (auto &callee : fnNode.callees) {
+        assert(evaluatedCallResult[callee].empty());
+      }
+    }
+  }
 }
 
 void CallAnalysis::PrintMap() const {
   llvm::errs() << "[lazyEvaledFn]\n";
-  for (auto &[fn, vec] : lazyEvaledFn) {
-    llvm::errs() << fn->getName() << ":\n";
-    for (auto &v : vec) {
-      llvm::errs() << "  " << v.ToString() << "\n";
+  for (auto &[fn, fnNode] : lazyEvaledFn) {
+    llvm::errs() << fn->getName();
+    llvm::errs() << "(";
+    for (unsigned i = 0; i < fnNode.args.size(); ++i) {
+      llvm::errs() << fnNode.args[i].ToString();
+      llvm::errs() << (i == fnNode.args.size() - 1 ? "" : ", ");
+    }
+    llvm::errs() << "):\n  callees:\n";
+    for (auto &v : fnNode.callees) {
+      llvm::errs() << "    " << v.ToString() << "\n";
+    }
+    llvm::errs() << "  returns:\n";
+    for (auto &v : fnNode.returnValues) {
+      llvm::errs() << "    " << v.ToString() << "\n";
     }
   }
   llvm::errs() << "\n[lazyEvaledCallInst]\n";

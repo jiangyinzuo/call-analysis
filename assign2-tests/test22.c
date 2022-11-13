@@ -1,21 +1,20 @@
-int add(int a, int b) {return a + b;}
+int sub(int a, int b) {return a - b;}
+int add(int a, int b) {
+	int c = sub(a, b);
+	int d = sub(b, a);	
+	return a + b + add(c, d);
+}
+int (*clever())(int, int) {
+	if (add(3, 4))
+		return add;
+	return sub;
+}
 int moo(int op, int op2, int op3) {
 	int x = 0;
 	int y = 0;
 	if (op == 1) {
 		x = 1;
 		y = 1;
-	} else if (op == 2) {
-		x = 2;
-		y = 2;
-	}
-
-	if (op2 == 1) {
-		y = 4;
-	}
-
-	if (op3 == 1) {
-		x = 3;
 	}
 
 	add(x, y);
