@@ -17,7 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 message(STATUS "LLVM LIBS : ${LLVM_LINK_COMPONENTS}")
 # Support plugins.
 
-set(ANALYSIS_INTERNAL on)
+set(ANALYSIS_INTERNAL off)
 if(${ANALYSIS_INTERNAL})
 add_definitions(-DANALYSIS_INTERNAL)
 endif()
@@ -30,3 +30,6 @@ add_executable(llvmassignment
 target_link_libraries(llvmassignment
 	${LLVM_LINK_COMPONENTS}
 	)
+
+install(TARGETS llvmassignment
+  RUNTIME DESTINATION bin)
